@@ -83,6 +83,30 @@ fprintf(fd, string, x1, x2, x3, x4, x5, x6, x7, x8, x9) {
     }
 }
 
+/* getchar is cursed */
+
+_uxn_brk 0x00;
+
+_getchar_vector() {
+    extrn uxn_deo2, uxn_dei;
+    auto type, c;
+    uxn_deo2(0x10, 0); /* Console/vector */
+    type = uxn_dei(0x17); /* Console/type */
+    c = uxn_dei(0x12); /* Console/read */
+    if (type != 1) {
+        c = -1;
+    }
+    return (c);
+}
+
+getchar() {
+    extrn uxn_deo2;
+    auto c;
+    uxn_deo2(0x10, &_getchar_vector); /* Console/vector */
+    c = _uxn_brk();
+    return (c);
+}
+
 printf(string, x1, x2, x3, x4, x5, x6, x7, x8, x9) {
     fprintf(0, string, x1, x2, x3, x4, x5, x6, x7, x8, x9);
 }
