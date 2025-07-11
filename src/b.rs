@@ -1032,7 +1032,8 @@ pub struct Compiler {
     pub arena: Arena,
     pub target: Target,
     pub error_count: usize,
-    pub historical: bool
+    pub historical: bool,
+    pub uxn_reloc: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1291,6 +1292,7 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     let ir          = flag_bool(c!("ir"), false, c!("Instead of compiling, dump the IR of the program to stdout"));
     let historical  = flag_bool(c!("hist"), false, c!("Makes the compiler strictly follow the description of the B language from the \"Users' Reference to B\" by Ken Thompson as much as possible"));
     let quiet       = flag_bool(c!("q"), false, c!("Makes the compiler yap less about what it's doing"));
+    let uxn_reloc   = flag_bool(c!("uxn-reloc"), false, c!("Outputs relocation table at the end of uxn rom"));
 
     let mut input_paths: Array<*const c_char> = zeroed();
     let mut run_args: Array<*const c_char> = zeroed();
@@ -1350,6 +1352,7 @@ pub unsafe fn main(mut argc: i32, mut argv: *mut*mut c_char) -> Option<()> {
     let mut c: Compiler = zeroed();
     c.target = target;
     c.historical = *historical;
+    c.uxn_reloc = *uxn_reloc;
 
     if !*nostdlib {
         // TODO: should be probably a list libb paths which we sequentually probe to find which one exists.

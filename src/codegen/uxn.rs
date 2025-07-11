@@ -41,7 +41,7 @@ pub struct Patch {
     pub offset: u16,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum PatchKind {
     UpperAbsolute,
     LowerAbsolute,
@@ -72,7 +72,8 @@ pub unsafe fn link_label(a: *mut Assembler, label: usize, addr: usize) {
     *(*a).resolved_addresses.items.add(label) = addr as u16;
 }
 
-pub unsafe fn apply_patches(output: *mut String_Builder, a: *mut Assembler) {
+pub unsafe fn apply_patches(output: *mut String_Builder, a: *mut Assembler, uxn_reloc: bool) {
+    let mut reloc_count = 0;
     for i in 0..(*a).patches.count {
         let patch = *(*a).patches.items.add(i);
         let addr = *(*a).resolved_addresses.items.add(patch.label);
@@ -95,6 +96,13 @@ pub unsafe fn apply_patches(output: *mut String_Builder, a: *mut Assembler) {
             PatchKind::LowerRelative => ((addr + offset).wrapping_sub(patch.addr).wrapping_sub(1)) & 0xff,
         };
         *(*output).items.add(patch.addr as usize) = byte as c_char;
+        if uxn_reloc && patch.kind == PatchKind::UpperAbsolute {
+            reloc_count += 1;
+            write_short(output, patch.addr);
+        }
+    }
+    if uxn_reloc {
+        write_short(output, reloc_count);
     }
 }
 
@@ -140,7 +148,7 @@ pub unsafe fn generate_program(output: *mut String_Builder, c: *const Compiler) 
     generate_data_section(output, da_slice((*c).data), &mut assembler);
     generate_globals(output, da_slice((*c).globals), &mut assembler);
 
-    apply_patches(output, &mut assembler);
+    apply_patches(output, &mut assembler, (*c).uxn_reloc);
 }
 
 pub unsafe fn generate_funcs(output: *mut String_Builder, funcs: *const [Func], assembler: &mut Assembler) {
