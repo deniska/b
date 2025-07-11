@@ -75,7 +75,7 @@ pub unsafe fn link_label(a: *mut Assembler, label: usize, addr: usize) {
     *(*a).resolved_addresses.items.add(label) = addr as u16;
 }
 
-pub unsafe fn apply_patches(output: *mut String_Builder, a: *mut Assembler) {
+pub unsafe fn apply_patches(output: *mut String_Builder, a: *mut Assembler) -> Option<()> {
     for i in 0..(*a).patches.count {
         let patch = *(*a).patches.items.add(i);
         let addr = *(*a).resolved_addresses.items.add(patch.label);
@@ -84,11 +84,11 @@ pub unsafe fn apply_patches(output: *mut String_Builder, a: *mut Assembler) {
                 let named_label = *(*a).named_labels.items.add(j);
                 if named_label.label == patch.label {
                     log(Log_Level::ERROR, c!("uxn: Label '%s' was never linked"), named_label.name);
-                    abort();
+                    return None;
                 }
             }
             log(Log_Level::ERROR, c!("uxn: Label #%ld was never linked"), patch.label);
-            abort();
+            return None;
         }
         let offset = patch.offset;
         let byte = match patch.kind {
@@ -99,18 +99,20 @@ pub unsafe fn apply_patches(output: *mut String_Builder, a: *mut Assembler) {
         };
         *(*output).items.add(patch.addr as usize) = byte as c_char;
     }
+    Some(())
 }
 
 const SP: u8 = 0;
 const BP: u8 = 2;
 const FIRST_ARG: u8 = 4;
 
-pub unsafe fn generate_asm_funcs(output: *mut String_Builder, asm_funcs: *const [AsmFunc], assembler: *mut Assembler) {
+pub unsafe fn generate_asm_funcs(output: *mut String_Builder, asm_funcs: *const [AsmFunc], assembler: *mut Assembler) -> Option<()> {
     for i in 0..asm_funcs.len() {
         let asm_func = (*asm_funcs)[i];
         link_label(assembler, get_or_create_label_by_name(assembler, asm_func.name), (*output).count);
-        process_asm_statements(output, da_slice(asm_func.body), assembler);
+        process_asm_statements(output, da_slice(asm_func.body), assembler)?;
     }
+    Some(())
 }
 
 pub unsafe fn generate_program(
@@ -173,13 +175,14 @@ pub unsafe fn run_program(cmd: *mut Cmd, emu: *const c_char, program_path: *cons
     Some(())
 }
 
-pub unsafe fn generate_funcs(output: *mut String_Builder, funcs: *const [Func], assembler: &mut Assembler) {
+pub unsafe fn generate_funcs(output: *mut String_Builder, funcs: *const [Func], assembler: &mut Assembler) -> Option<()> {
     for i in 0..funcs.len() {
-        generate_function((*funcs)[i].name, (*funcs)[i].name_loc, (*funcs)[i].params_count, (*funcs)[i].auto_vars_count, da_slice((*funcs)[i].body), output, assembler);
+        generate_function((*funcs)[i].name, (*funcs)[i].name_loc, (*funcs)[i].params_count, (*funcs)[i].auto_vars_count, da_slice((*funcs)[i].body), output, assembler)?;
     }
+    Some(())
 }
 
-pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, params_count: usize, auto_vars_count: usize, body: *const [OpWithLocation], output: *mut String_Builder, assembler: *mut Assembler) {
+pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, params_count: usize, auto_vars_count: usize, body: *const [OpWithLocation], output: *mut String_Builder, assembler: *mut Assembler) -> Option<()> {
     link_label(assembler, get_or_create_label_by_name(assembler, name), (*output).count);
 
     const MAX_ARGS: usize = (256 - FIRST_ARG as usize) / 2;
@@ -498,7 +501,7 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, params_count
                 store_auto(output, result);
             }
             Op::Asm {stmts} => {
-                process_asm_statements(output, da_slice(stmts), assembler);
+                process_asm_statements(output, da_slice(stmts), assembler)?;
             }
             Op::Label {label} => {
                 link_label(assembler, *labels.items.add(label), (*output).count);
@@ -571,6 +574,8 @@ pub unsafe fn generate_function(name: *const c_char, name_loc: Loc, params_count
 
     // return
     write_op(output, UxnOp::JMP2r);
+
+    Some(())
 }
 
 pub unsafe fn write_op(output: *mut String_Builder, op: UxnOp) {
@@ -712,7 +717,7 @@ pub unsafe fn store_auto(output: *mut String_Builder, index: usize) {
     write_op(output, UxnOp::STA2);
 }
 
-pub unsafe fn generate_extrns(output: *mut String_Builder, extrns: *const [*const c_char], funcs: *const [Func], globals: *const [Global], assembler: *mut Assembler) {
+pub unsafe fn generate_extrns(output: *mut String_Builder, extrns: *const [*const c_char], funcs: *const [Func], globals: *const [Global], assembler: *mut Assembler) -> Option<()> {
     'skip_function_or_global: for i in 0..extrns.len() {
         // assemble a few "stdlib" functions which can't be programmed in B
         let name = (*extrns)[i];
@@ -813,9 +818,10 @@ pub unsafe fn generate_extrns(output: *mut String_Builder, extrns: *const [*cons
             write_op(output, UxnOp::JMP2r);
         } else {
             log(Log_Level::ERROR, c!("uxn: Unknown extrn: `%s`, can not link"), name);
-            abort();
+            return None;
         }
     }
+    Some(())
 }
 
 pub unsafe fn generate_globals(output: *mut String_Builder, globals: *const [Global], assembler: *mut Assembler) {
@@ -1188,14 +1194,15 @@ pub unsafe fn has_immediate(op: UxnOp) -> bool {
     has_byte_immediate(op) || has_short_immediate(op)
 }
 
-pub unsafe fn process_asm_statements(output: *mut String_Builder, asm_stmts: *const [AsmStmt], assembler: *mut Assembler) {
+pub unsafe fn process_asm_statements(output: *mut String_Builder, asm_stmts: *const [AsmStmt], assembler: *mut Assembler) -> Option<()> {
     for i in 0..asm_stmts.len() {
         let asm_stmt = (*asm_stmts)[i];
-        process_asm_statement(output, asm_stmt, assembler);
+        process_asm_statement(output, asm_stmt, assembler)?;
     }
+    Some(())
 }
 
-pub unsafe fn process_asm_statement(output: *mut String_Builder, asm_stmt: AsmStmt, assembler: *mut Assembler) {
+pub unsafe fn process_asm_statement(output: *mut String_Builder, asm_stmt: AsmStmt, assembler: *mut Assembler) -> Option<()> {
     // TODO: leaky function, but beware holding onto strings produced by the lexer
 
     let mut lexer_name: String_Builder = zeroed();
@@ -1203,44 +1210,44 @@ pub unsafe fn process_asm_statement(output: *mut String_Builder, asm_stmt: AsmSt
     da_append(&mut lexer_name, 0);
     let mut l = lexer::new(lexer_name.items, asm_stmt.line, asm_stmt.line.add(strlen(asm_stmt.line)), false);
     let saved_point = l.parse_point;
-    lexer::get_token(&mut l).expect("Lexing error");
+    lexer::get_token(&mut l)?;
     match l.token {
         Token::EOF => { /* Allow empty asm line, not sure if useful */ }
         Token::ID => {
             // label or opcode
-            lexer::get_token(&mut l).expect("Lexing error");
+            lexer::get_token(&mut l)?;
             match l.token {
                 Token::Colon => {
                     // label
                     link_label(assembler, get_or_create_label_by_name(assembler, l.string), (*output).count);
-                    lexer::get_token(&mut l).expect("Lexing error");
+                    lexer::get_token(&mut l)?;
                     match l.token {
                         Token::ID => { /* must be an an opcode */ }
-                        Token::EOF => { return; }
+                        Token::EOF => { return Some(()); }
                         _ => {
                             diagf!(loc(&mut l), c!("ERROR: expected %s but got %s\n"),
                                 lexer::display_token(Token::ID),
                                 lexer::display_token(l.token));
-                            abort();
+                            return None;
                         }
                     }
                 }
                 _ => {
                     l.parse_point = saved_point;
-                    lexer::get_token(&mut l).expect("Lexing error");
+                    lexer::get_token(&mut l)?;
                 }
             }
         }
         _ => {
             diagf!(loc(&mut l), c!("ERROR: expected %s but got %s\n"),
                 lexer::display_token(Token::ID), lexer::display_token(l.token));
-            abort();
+            return None;
         }
     }
     // must be an opcode
     if let Some(opcode) = find_opcode_by_name(l.string) {
         write_op(output, opcode);
-        lexer::get_token(&mut l).expect("Lexing error");
+        lexer::get_token(&mut l)?;
         if has_immediate(opcode) {
             match l.token {
                 Token::ID => {
@@ -1254,7 +1261,7 @@ pub unsafe fn process_asm_statement(output: *mut String_Builder, asm_stmt: AsmSt
                         }
                     } else {
                         diagf!(loc(&mut l), c!("ERROR: label is not a valid short immediate\n"));
-                        abort();
+                        return None;
                     }
                 }
                 Token::IntLit | Token::CharLit => {
@@ -1271,30 +1278,30 @@ pub unsafe fn process_asm_statement(output: *mut String_Builder, asm_stmt: AsmSt
                         lexer::display_token(Token::IntLit),
                         lexer::display_token(Token::CharLit),
                         lexer::display_token(l.token));
-                    abort();
+                    return None;
                 }
             }
         } else {
             match l.token {
-                Token::EOF => { return; }
+                Token::EOF => { return Some(()); }
                 _ => {
                     diagf!(loc(&mut l), c!("ERROR: expected end of the line but got %s\n"),
                         lexer::display_token(l.token));
-                    abort();
+                    return None;
                 }
             }
         }
     } else {
         diagf!(loc(&mut l), c!("ERROR: invalid uxn opcode: %s\n"), l.string);
-        abort();
+        return None;
     }
-    lexer::get_token(&mut l).expect("Lexing error");
+    lexer::get_token(&mut l)?;
     match l.token {
-        Token::EOF => { return; }
+        Token::EOF => { return Some(()); }
         _ => {
             diagf!(loc(&mut l), c!("ERROR: expected nothing but got %s\n"),
                 lexer::display_token(l.token));
-            abort();
+            return None;
         }
     }
 }
